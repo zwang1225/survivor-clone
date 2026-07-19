@@ -12,11 +12,73 @@
         align-items: center;
         min-height: 100vh;
         background: #111;
+        font-family: monospace;
+      }
+
+      #game-container {
+        position: relative;
+      }
+
+      #level-up-overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.75);
+      }
+
+      #level-up-overlay.hidden {
+        display: none;
+      }
+
+      .level-up-card {
+        background: #1a1a2e;
+        border: 2px solid #4fc3f7;
+        border-radius: 8px;
+        padding: 24px;
+        text-align: center;
+        color: #ffffff;
+      }
+
+      .level-up-card h2 {
+        margin: 0 0 16px;
+        color: #4fc3f7;
+      }
+
+      #level-up-choices {
+        display: flex;
+        gap: 12px;
+      }
+
+      .level-up-choice {
+        font-family: monospace;
+        font-size: 14px;
+        background: #16213e;
+        border: 2px solid #4fc3f7;
+        border-radius: 6px;
+        color: #ffffff;
+        padding: 12px 16px;
+        cursor: pointer;
+        min-width: 120px;
+      }
+
+      .level-up-choice:hover {
+        background: #4fc3f7;
+        color: #16213e;
       }
     </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="game-container">
+      <div id="app"></div>
+      <div id="level-up-overlay" class="hidden">
+        <div class="level-up-card">
+          <h2>Level Up!</h2>
+          <div id="level-up-choices"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

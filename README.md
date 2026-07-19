@@ -14,6 +14,9 @@ WASD/arrow keys to move. Auto-fires at the nearest enemy.
 
 ## Current state
 
-Core loop only: move, enemies spawn and chase, auto-attack kills them,
-contact with an enemy costs HP, 0 HP ends the run. No persistence, no
-upgrades, no art assets yet (placeholder colored circles).
+Move, zombies spawn and chase, auto-fire kills them, contact costs HP,
+0 HP ends the run. Kills drop XP gems (auto-collected when you get close);
+leveling up offers a choice of 3 random weapon unlocks/upgrades from a
+pool of 3 (pistol, shotgun, machine gun). Real sprite art for player/zombie
+(see `public/assets/CREDITS.md`), everything else (bullets, gems) still
+placeholder shapes. No persistence yet.
