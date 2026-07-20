@@ -8,6 +8,7 @@ import {
 } from '../weapons'
 import { PASSIVE_DEFS, type PassiveDef } from '../passives'
 import { EVOLUTION_DEFS, type EvolvedWeaponDef } from '../evolutions'
+import { RARITY_WEIGHTS, RARITY_LABELS } from '../rarity'
 
 const WORLD_WIDTH = 800
 const WORLD_HEIGHT = 600
@@ -384,8 +385,35 @@ export class GameScene extends Phaser.Scene {
       pool.push({ kind: 'passive', def, nextLevel: currentLevel + 1, isNew: currentLevel === 0 })
     }
 
-    Phaser.Utils.Array.Shuffle(pool)
-    return pool.slice(0, count)
+    return this.pickWeighted(pool, count)
+  }
+
+  // Weighted sampling without replacement: repeatedly roll against the
+  // remaining pool's total weight, removing each pick so it can't be
+  // chosen twice. Rare items are still possible, just less likely --
+  // this replaces the old uniform Phaser.Utils.Array.Shuffle.
+  private pickWeighted(pool: LevelUpChoice[], count: number): LevelUpChoice[] {
+    const remaining = [...pool]
+    const picked: LevelUpChoice[] = []
+
+    while (picked.length < count && remaining.length > 0) {
+      const totalWeight = remaining.reduce((sum, choice) => sum + RARITY_WEIGHTS[choice.def.rarity], 0)
+      let roll = Math.random() * totalWeight
+      let index = remaining.length - 1
+
+      for (let i = 0; i < remaining.length; i++) {
+        roll -= RARITY_WEIGHTS[remaining[i].def.rarity]
+        if (roll <= 0) {
+          index = i
+          break
+        }
+      }
+
+      picked.push(remaining[index])
+      remaining.splice(index, 1)
+    }
+
+    return picked
   }
 
   private showLevelUpChoices(choices: LevelUpChoice[]): void {
@@ -402,10 +430,11 @@ export class GameScene extends Phaser.Scene {
     container.innerHTML = ''
     choices.forEach((choice) => {
       const button = document.createElement('button')
-      button.className = 'level-up-choice'
-      const label = choice.isNew ? 'New!' : `Level ${choice.nextLevel}`
+      button.className = `level-up-choice level-up-choice--${choice.def.rarity}`
+      const rarityLabel = RARITY_LABELS[choice.def.rarity]
+      const statusLabel = choice.isNew ? 'New!' : `Level ${choice.nextLevel}`
       const description = choice.kind === 'passive' ? `<br><small>${choice.def.description}</small>` : ''
-      button.innerHTML = `<strong>${choice.def.name}</strong><br>${label}${description}`
+      button.innerHTML = `<span class="rarity-label">${rarityLabel}</span><br><strong>${choice.def.name}</strong><br>${statusLabel}${description}`
       button.addEventListener('click', () => this.applyLevelUpChoice(choice))
       container.appendChild(button)
     })

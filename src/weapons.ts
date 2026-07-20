@@ -1,7 +1,10 @@
+import type { Rarity } from './rarity'
+
 export interface WeaponDef {
   id: string
   name: string
   color: number
+  rarity: Rarity
   baseDamage: number
   damagePerLevel: number
   baseFireIntervalMs: number
@@ -17,6 +20,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
     id: 'pistol',
     name: 'Pistol',
     color: 0xffee58,
+    rarity: 'common',
     baseDamage: 10,
     damagePerLevel: 4,
     baseFireIntervalMs: 450,
@@ -30,6 +34,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
     id: 'shotgun',
     name: 'Shotgun',
     color: 0xff8a65,
+    rarity: 'uncommon',
     baseDamage: 6,
     damagePerLevel: 2,
     baseFireIntervalMs: 800,
@@ -43,6 +48,7 @@ export const WEAPON_DEFS: WeaponDef[] = [
     id: 'machinegun',
     name: 'Machine Gun',
     color: 0x81c784,
+    rarity: 'common',
     baseDamage: 4,
     damagePerLevel: 1,
     baseFireIntervalMs: 180,
