@@ -333,7 +333,13 @@ export class GameScene extends Phaser.Scene {
 
   private showLevelUpChoices(choices: LevelUpChoice[]): void {
     this.isPausedForLevelUp = true
-    this.player.setVelocity(0, 0)
+    // update() bailing out on isPausedForLevelUp only stops us from
+    // re-issuing velocities -- it doesn't stop Arcade Physics from
+    // continuing to integrate whatever velocity zombies/projectiles
+    // already had, and doesn't stop the zombie-spawn timer. Pause both
+    // for a real freeze.
+    this.physics.pause()
+    this.time.paused = true
 
     const container = document.getElementById('level-up-choices')!
     container.innerHTML = ''
@@ -360,6 +366,8 @@ export class GameScene extends Phaser.Scene {
 
     document.getElementById('level-up-overlay')!.classList.add('hidden')
     this.isPausedForLevelUp = false
+    this.physics.resume()
+    this.time.paused = false
     this.updateHud()
   }
 
