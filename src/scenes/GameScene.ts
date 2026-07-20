@@ -6,6 +6,7 @@ import {
   weaponFireIntervalAtLevel,
   weaponProjectileCountAtLevel,
 } from '../weapons'
+import { PASSIVE_DEFS, type PassiveDef } from '../passives'
 
 const WORLD_WIDTH = 800
 const WORLD_HEIGHT = 600
@@ -14,26 +15,26 @@ const ZOMBIE_SPEED = 80
 const ZOMBIE_SPAWN_INTERVAL_MS = 1000
 const PROJECTILE_SPEED = 500
 const PROJECTILE_LIFETIME_MS = 2000
-const PLAYER_MAX_HP = 100
+const PLAYER_BASE_MAX_HP = 100
 // Zombies die on contact rather than dealing repeated damage while
 // overlapping -- avoids needing per-zombie damage-cooldown/knockback logic
 // for a first playable prototype. Revisit once swarming behavior matters.
 const ZOMBIE_CONTACT_DAMAGE = 15
 const ZOMBIE_HP = 20
 const XP_GEM_VALUE = 5
-const XP_GEM_MAGNET_RADIUS = 90
+const XP_GEM_BASE_MAGNET_RADIUS = 90
 const XP_GEM_MAGNET_SPEED = 300
 const STARTING_WEAPON_ID = 'pistol'
+// Cooldown reduction from passives can't push fire interval to zero/negative.
+const MIN_COOLDOWN_MULTIPLIER = 0.3
 
 function xpRequiredForLevel(level: number): number {
   return 20 + (level - 1) * 15
 }
 
-interface WeaponChoice {
-  def: WeaponDef
-  nextLevel: number
-  isNew: boolean
-}
+type LevelUpChoice =
+  | { kind: 'weapon'; def: WeaponDef; nextLevel: number; isNew: boolean }
+  | { kind: 'passive'; def: PassiveDef; nextLevel: number; isNew: boolean }
 
 export class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite
@@ -43,11 +44,20 @@ export class GameScene extends Phaser.Scene {
   private projectiles!: Phaser.Physics.Arcade.Group
   private xpGems!: Phaser.Physics.Arcade.Group
 
-  private playerHp = PLAYER_MAX_HP
+  private playerMaxHp = PLAYER_BASE_MAX_HP
+  private playerHp = PLAYER_BASE_MAX_HP
   private playerLevel = 1
   private playerXp = 0
   private ownedWeapons = new Map<string, number>()
   private weaponCooldowns = new Map<string, number>()
+  private ownedPassives = new Map<string, number>()
+
+  // Aggregated from ownedPassives by recomputePassiveEffects(). Percentage
+  // stats are multipliers (1 = no effect); magnetRadiusBonus is additive.
+  private moveSpeedMultiplier = 1
+  private damageMultiplier = 1
+  private cooldownMultiplier = 1
+  private magnetRadiusBonus = 0
 
   private hpText!: Phaser.GameObjects.Text
   private killText!: Phaser.GameObjects.Text
@@ -140,7 +150,8 @@ export class GameScene extends Phaser.Scene {
       this.player.setRotation(Math.atan2(dir.y, dir.x))
     }
 
-    this.player.setVelocity(dir.x * PLAYER_SPEED, dir.y * PLAYER_SPEED)
+    const speed = PLAYER_SPEED * this.moveSpeedMultiplier
+    this.player.setVelocity(dir.x * speed, dir.y * speed)
   }
 
   private spawnZombie(): void {
@@ -185,10 +196,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private attractXpGems(): void {
+    const radius = XP_GEM_BASE_MAGNET_RADIUS + this.magnetRadiusBonus
+
     this.xpGems.getChildren().forEach((obj) => {
       const gem = obj as Phaser.Physics.Arcade.Sprite
       const distSq = Phaser.Math.Distance.Squared(this.player.x, this.player.y, gem.x, gem.y)
-      if (distSq > XP_GEM_MAGNET_RADIUS * XP_GEM_MAGNET_RADIUS) {
+      if (distSq > radius * radius) {
         gem.setVelocity(0, 0)
         return
       }
@@ -204,7 +217,7 @@ export class GameScene extends Phaser.Scene {
       if (!def) continue
 
       const lastFired = this.weaponCooldowns.get(weaponId) ?? 0
-      const interval = weaponFireIntervalAtLevel(def, level)
+      const interval = weaponFireIntervalAtLevel(def, level) * this.cooldownMultiplier
       if (now - lastFired < interval) continue
 
       const target = this.findNearestZombie()
@@ -220,7 +233,7 @@ export class GameScene extends Phaser.Scene {
     if (baseDir.lengthSq() === 0) return
     baseDir.normalize()
 
-    const damage = weaponDamageAtLevel(def, level)
+    const damage = Math.round(weaponDamageAtLevel(def, level) * this.damageMultiplier)
     const projectileCount = weaponProjectileCountAtLevel(def, level)
     const spreadRad = Phaser.Math.DegToRad(def.spreadDegrees)
 
@@ -292,7 +305,7 @@ export class GameScene extends Phaser.Scene {
       this.playerXp -= xpRequiredForLevel(this.playerLevel)
       this.playerLevel += 1
 
-      const choices = this.rollWeaponChoices(3)
+      const choices = this.rollLevelUpChoices(3)
       if (choices.length > 0) {
         this.showLevelUpChoices(choices)
         break
@@ -300,18 +313,25 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private rollWeaponChoices(count: number): WeaponChoice[] {
-    const pool: WeaponChoice[] = []
+  private rollLevelUpChoices(count: number): LevelUpChoice[] {
+    const pool: LevelUpChoice[] = []
+
     for (const def of WEAPON_DEFS) {
       const currentLevel = this.ownedWeapons.get(def.id) ?? 0
       if (currentLevel >= def.maxLevel) continue
-      pool.push({ def, nextLevel: currentLevel + 1, isNew: currentLevel === 0 })
+      pool.push({ kind: 'weapon', def, nextLevel: currentLevel + 1, isNew: currentLevel === 0 })
     }
+    for (const def of PASSIVE_DEFS) {
+      const currentLevel = this.ownedPassives.get(def.id) ?? 0
+      if (currentLevel >= def.maxLevel) continue
+      pool.push({ kind: 'passive', def, nextLevel: currentLevel + 1, isNew: currentLevel === 0 })
+    }
+
     Phaser.Utils.Array.Shuffle(pool)
     return pool.slice(0, count)
   }
 
-  private showLevelUpChoices(choices: WeaponChoice[]): void {
+  private showLevelUpChoices(choices: LevelUpChoice[]): void {
     this.isPausedForLevelUp = true
     this.player.setVelocity(0, 0)
 
@@ -321,19 +341,67 @@ export class GameScene extends Phaser.Scene {
       const button = document.createElement('button')
       button.className = 'level-up-choice'
       const label = choice.isNew ? 'New!' : `Level ${choice.nextLevel}`
-      button.innerHTML = `<strong>${choice.def.name}</strong><br>${label}`
-      button.addEventListener('click', () => this.applyWeaponChoice(choice))
+      const description = choice.kind === 'passive' ? `<br><small>${choice.def.description}</small>` : ''
+      button.innerHTML = `<strong>${choice.def.name}</strong><br>${label}${description}`
+      button.addEventListener('click', () => this.applyLevelUpChoice(choice))
       container.appendChild(button)
     })
 
     document.getElementById('level-up-overlay')!.classList.remove('hidden')
   }
 
-  private applyWeaponChoice(choice: WeaponChoice): void {
-    this.ownedWeapons.set(choice.def.id, choice.nextLevel)
+  private applyLevelUpChoice(choice: LevelUpChoice): void {
+    if (choice.kind === 'weapon') {
+      this.ownedWeapons.set(choice.def.id, choice.nextLevel)
+    } else {
+      this.ownedPassives.set(choice.def.id, choice.nextLevel)
+      this.recomputePassiveEffects()
+    }
+
     document.getElementById('level-up-overlay')!.classList.add('hidden')
     this.isPausedForLevelUp = false
     this.updateHud()
+  }
+
+  private recomputePassiveEffects(): void {
+    let moveSpeedMult = 1
+    let damageMult = 1
+    let cooldownMult = 1
+    let magnetBonus = 0
+    let maxHpBonus = 0
+
+    for (const [id, level] of this.ownedPassives) {
+      const def = PASSIVE_DEFS.find((p) => p.id === id)
+      if (!def) continue
+
+      switch (def.stat) {
+        case 'moveSpeed':
+          moveSpeedMult += def.effectPerLevel * level
+          break
+        case 'damage':
+          damageMult += def.effectPerLevel * level
+          break
+        case 'cooldown':
+          cooldownMult += def.effectPerLevel * level
+          break
+        case 'magnetRadius':
+          magnetBonus += def.effectPerLevel * level
+          break
+        case 'maxHp':
+          maxHpBonus += def.effectPerLevel * level
+          break
+      }
+    }
+
+    this.moveSpeedMultiplier = moveSpeedMult
+    this.damageMultiplier = damageMult
+    this.cooldownMultiplier = Math.max(MIN_COOLDOWN_MULTIPLIER, cooldownMult)
+    this.magnetRadiusBonus = magnetBonus
+
+    const newMaxHp = PLAYER_BASE_MAX_HP + maxHpBonus
+    const hpGain = newMaxHp - this.playerMaxHp
+    this.playerMaxHp = newMaxHp
+    if (hpGain > 0) this.playerHp = Math.min(this.playerMaxHp, this.playerHp + hpGain)
   }
 
   private endGame(): void {
@@ -351,7 +419,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateHud(): void {
-    this.hpText.setText(`HP: ${this.playerHp}`)
+    this.hpText.setText(`HP: ${this.playerHp}/${this.playerMaxHp}`)
     this.levelText.setText(`Lv ${this.playerLevel}  XP: ${this.playerXp}/${xpRequiredForLevel(this.playerLevel)}`)
     this.killText.setText(`Kills: ${this.killCount}`)
     this.timeText.setText(`Time: ${(this.survivedMs / 1000).toFixed(1)}s`)

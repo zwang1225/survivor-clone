@@ -38,8 +38,8 @@ Reference: Vampire Survivors' progression design, researched 2026-07-19.
 
 | Phase | Goal | Status |
 | --- | --- | --- |
-| 1 | Passive item pool — stat multipliers (move speed, damage, cooldown/fire-rate, pickup radius, max HP), same level-up choice mechanic as weapons, pool mixed with weapons in the 3-choice roll | not started |
-| 2 | Weapon evolution — define 1 evolution pair per existing weapon (e.g. Pistol + a fire-rate passive maxed → evolved weapon), auto-detect condition met, offer/apply the evolved weapon replacing the base one | not started, blocked on 1 |
+| 1 | Passive item pool — stat multipliers (move speed, damage, cooldown/fire-rate, pickup radius, max HP), same level-up choice mechanic as weapons, pool mixed with weapons in the 3-choice roll | done |
+| 2 | Weapon evolution — define 1 evolution pair per existing weapon (e.g. Pistol + a fire-rate passive maxed → evolved weapon), auto-detect condition met, offer/apply the evolved weapon replacing the base one | not started, ready to begin |
 | 3 | Rarity-weighted level-up choices — common/uncommon/rare tiers on weapons+passives, weighted random instead of uniform shuffle | not started |
 | 4 | Difficulty & enemy variety — new zombie types with distinct stats/behavior (fast+weak, slow+tanky, ranged), periodic elite spawns, plus spawn-rate/HP scaling with survival time | not started |
 | 5 | Game-feel polish — hit-flash on zombie hit, camera shake on player damage, floating damage numbers, kill particle burst | not started |
