@@ -41,7 +41,7 @@ Reference: Vampire Survivors' progression design, researched 2026-07-19.
 | 1 | Passive item pool — stat multipliers (move speed, damage, cooldown/fire-rate, pickup radius, max HP), same level-up choice mechanic as weapons, pool mixed with weapons in the 3-choice roll | done |
 | 2 | Weapon evolution — Pistol+Quick Hands→Deagle (pierce 3), Shotgun+Strength→Auto Shotgun (fast spread), Machine Gun+Boots→Minigun (fast tight stream); auto-applies when both maxed, replaces the base weapon | done |
 | 3 | Rarity-weighted level-up choices — common/uncommon/rare tiers (weights 60/30/10) on weapons+passives, weighted-without-replacement pick instead of uniform shuffle | done |
-| 4 | Difficulty & enemy variety — new zombie types with distinct stats/behavior (fast+weak, slow+tanky, ranged), periodic elite spawns, plus spawn-rate/HP scaling with survival time | not started |
+| 4 | Difficulty & enemy variety — Walker/Runner/Brute/Spitter (fast+weak/slow+tanky/ranged), time-gated unlocks (0/20s/40s/60s), elite spawns every 45s (3x hp, 1.2x speed, 4x XP), spawn interval decaying 1000ms→350ms with survival time | done |
 | 5 | Game-feel polish — hit-flash on zombie hit, camera shake on player damage, floating damage numbers, kill particle burst | not started |
 | 6 (stretch) | Union merges — two maxed weapons combine into one, frees a slot | not started, low priority |
 | 7 | Maps — scrolling world (camera follows player instead of fixed arena), tile backgrounds, obstacles; map-select as a later unlock layer once more than one map exists | not started |

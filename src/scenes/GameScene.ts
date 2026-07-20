@@ -9,26 +9,34 @@ import {
 import { PASSIVE_DEFS, type PassiveDef } from '../passives'
 import { EVOLUTION_DEFS, type EvolvedWeaponDef } from '../evolutions'
 import { RARITY_WEIGHTS, RARITY_LABELS } from '../rarity'
+import { ENEMY_DEFS, type EnemyDef } from '../enemies'
 
 const WORLD_WIDTH = 800
 const WORLD_HEIGHT = 600
 const PLAYER_SPEED = 200
-const ZOMBIE_SPEED = 80
-const ZOMBIE_SPAWN_INTERVAL_MS = 1000
 const PROJECTILE_SPEED = 500
 const PROJECTILE_LIFETIME_MS = 2000
 const PLAYER_BASE_MAX_HP = 100
 // Zombies die on contact rather than dealing repeated damage while
 // overlapping -- avoids needing per-zombie damage-cooldown/knockback logic
 // for a first playable prototype. Revisit once swarming behavior matters.
-const ZOMBIE_CONTACT_DAMAGE = 15
-const ZOMBIE_HP = 20
-const XP_GEM_VALUE = 5
 const XP_GEM_BASE_MAGNET_RADIUS = 90
 const XP_GEM_MAGNET_SPEED = 300
 const STARTING_WEAPON_ID = 'pistol'
 // Cooldown reduction from passives can't push fire interval to zero/negative.
 const MIN_COOLDOWN_MULTIPLIER = 0.3
+
+// Spawn interval shrinks as survival time increases, down to a floor.
+const BASE_SPAWN_INTERVAL_MS = 1000
+const MIN_SPAWN_INTERVAL_MS = 350
+const SPAWN_INTERVAL_DECAY_PER_SEC = 5
+
+const ELITE_INTERVAL_MS = 45_000
+const ELITE_HP_MULTIPLIER = 3
+const ELITE_SPEED_MULTIPLIER = 1.2
+const ELITE_CONTACT_MULTIPLIER = 1.5
+const ELITE_XP_MULTIPLIER = 4
+const ELITE_SCALE = 1.6
 
 function xpRequiredForLevel(level: number): number {
   return 20 + (level - 1) * 15
@@ -44,7 +52,11 @@ export class GameScene extends Phaser.Scene {
   private wasd!: { W: Phaser.Input.Keyboard.Key; A: Phaser.Input.Keyboard.Key; S: Phaser.Input.Keyboard.Key; D: Phaser.Input.Keyboard.Key }
   private zombies!: Phaser.Physics.Arcade.Group
   private projectiles!: Phaser.Physics.Arcade.Group
+  private enemyProjectiles!: Phaser.Physics.Arcade.Group
   private xpGems!: Phaser.Physics.Arcade.Group
+
+  private lastZombieSpawnAt = 0
+  private lastEliteSpawnAt = 0
 
   private playerMaxHp = PLAYER_BASE_MAX_HP
   private playerHp = PLAYER_BASE_MAX_HP
@@ -83,6 +95,7 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.makeCircleTexture('bullet-tex', 0xffffff, 5)
+    this.makeCircleTexture('enemy-bullet-tex', 0xe91e63, 4)
     this.makeCircleTexture('gem-tex', 0x4fc3f7, 6)
 
     this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT)
@@ -94,16 +107,17 @@ export class GameScene extends Phaser.Scene {
 
     this.zombies = this.physics.add.group()
     this.projectiles = this.physics.add.group()
+    this.enemyProjectiles = this.physics.add.group()
     this.xpGems = this.physics.add.group()
 
     this.cursors = this.input.keyboard!.createCursorKeys()
     this.wasd = this.input.keyboard!.addKeys('W,A,S,D') as typeof this.wasd
 
-    this.time.addEvent({
-      delay: ZOMBIE_SPAWN_INTERVAL_MS,
-      loop: true,
-      callback: () => this.spawnZombie(),
-    })
+    // Spawn timing is driven from update() (see updateSpawning) instead of
+    // a fixed time.addEvent loop, since the interval now shrinks over
+    // survival time.
+    this.lastZombieSpawnAt = this.time.now
+    this.lastEliteSpawnAt = this.time.now
 
     this.physics.add.overlap(this.projectiles, this.zombies, (proj, zombie) =>
       this.onProjectileHitZombie(proj as Phaser.Physics.Arcade.Sprite, zombie as Phaser.Physics.Arcade.Sprite)
@@ -113,6 +127,9 @@ export class GameScene extends Phaser.Scene {
     )
     this.physics.add.overlap(this.player, this.xpGems, (_player, gem) =>
       this.onPlayerCollectGem(gem as Phaser.Physics.Arcade.Sprite)
+    )
+    this.physics.add.overlap(this.player, this.enemyProjectiles, (_player, proj) =>
+      this.onPlayerHitByProjectile(proj as Phaser.Physics.Arcade.Sprite)
     )
 
     this.hpText = this.add.text(8, 8, '', { fontFamily: 'monospace', fontSize: '16px', color: '#ffffff' })
@@ -127,9 +144,10 @@ export class GameScene extends Phaser.Scene {
 
     this.survivedMs += delta
     this.movePlayer()
-    this.chaseZombies()
+    this.updateZombieBehavior(this.time.now)
     this.attractXpGems()
     this.autoFireWeapons(this.time.now)
+    this.updateSpawning(this.time.now)
     this.updateHud()
   }
 
@@ -157,45 +175,119 @@ export class GameScene extends Phaser.Scene {
     this.player.setVelocity(dir.x * speed, dir.y * speed)
   }
 
+  private updateSpawning(now: number): void {
+    const survivedSec = this.survivedMs / 1000
+    const spawnInterval = Math.max(MIN_SPAWN_INTERVAL_MS, BASE_SPAWN_INTERVAL_MS - survivedSec * SPAWN_INTERVAL_DECAY_PER_SEC)
+    if (now - this.lastZombieSpawnAt >= spawnInterval) {
+      this.lastZombieSpawnAt = now
+      this.spawnZombie()
+    }
+
+    if (now - this.lastEliteSpawnAt >= ELITE_INTERVAL_MS) {
+      this.lastEliteSpawnAt = now
+      this.spawnEliteZombie()
+    }
+  }
+
+  private eligibleEnemyDefs(): EnemyDef[] {
+    return ENEMY_DEFS.filter((def) => this.survivedMs >= def.unlocksAtMs)
+  }
+
+  private randomEdgePosition(): { x: number; y: number } {
+    const edge = Phaser.Math.Between(0, 3)
+    switch (edge) {
+      case 0:
+        return { x: Phaser.Math.Between(0, WORLD_WIDTH), y: -20 }
+      case 1:
+        return { x: WORLD_WIDTH + 20, y: Phaser.Math.Between(0, WORLD_HEIGHT) }
+      case 2:
+        return { x: Phaser.Math.Between(0, WORLD_WIDTH), y: WORLD_HEIGHT + 20 }
+      default:
+        return { x: -20, y: Phaser.Math.Between(0, WORLD_HEIGHT) }
+    }
+  }
+
   private spawnZombie(): void {
     if (this.isGameOver) return
 
-    const edge = Phaser.Math.Between(0, 3)
-    let x = 0
-    let y = 0
-    switch (edge) {
-      case 0:
-        x = Phaser.Math.Between(0, WORLD_WIDTH)
-        y = -20
-        break
-      case 1:
-        x = WORLD_WIDTH + 20
-        y = Phaser.Math.Between(0, WORLD_HEIGHT)
-        break
-      case 2:
-        x = Phaser.Math.Between(0, WORLD_WIDTH)
-        y = WORLD_HEIGHT + 20
-        break
-      default:
-        x = -20
-        y = Phaser.Math.Between(0, WORLD_HEIGHT)
-        break
-    }
+    const def = Phaser.Utils.Array.GetRandom(this.eligibleEnemyDefs())
+    const { x, y } = this.randomEdgePosition()
 
     const zombie = this.zombies.create(x, y, 'zombie-tex') as Phaser.Physics.Arcade.Sprite
-    zombie.setData('hp', ZOMBIE_HP)
+    zombie.setTint(def.color)
+    zombie.setData('def', def)
+    zombie.setData('hp', def.hp)
+    zombie.setData('isElite', false)
   }
 
-  private chaseZombies(): void {
+  private spawnEliteZombie(): void {
+    if (this.isGameOver) return
+
+    const def = Phaser.Utils.Array.GetRandom(this.eligibleEnemyDefs())
+    const { x, y } = this.randomEdgePosition()
+
+    const zombie = this.zombies.create(x, y, 'zombie-tex') as Phaser.Physics.Arcade.Sprite
+    zombie.setTint(def.color)
+    zombie.setScale(ELITE_SCALE)
+    zombie.setData('def', def)
+    zombie.setData('hp', Math.round(def.hp * ELITE_HP_MULTIPLIER))
+    zombie.setData('isElite', true)
+    this.showEliteSpawnNotice(def)
+  }
+
+  private showEliteSpawnNotice(def: EnemyDef): void {
+    const text = this.add
+      .text(WORLD_WIDTH / 2, 150, `Elite ${def.name} incoming!`, {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: '#ff5252',
+      })
+      .setOrigin(0.5)
+
+    this.tweens.add({
+      targets: text,
+      alpha: 0,
+      duration: 2500,
+      onComplete: () => text.destroy(),
+    })
+  }
+
+  private updateZombieBehavior(now: number): void {
     this.zombies.getChildren().forEach((obj) => {
       const zombie = obj as Phaser.Physics.Arcade.Sprite
+      const def = zombie.getData('def') as EnemyDef
       const dir = new Phaser.Math.Vector2(this.player.x - zombie.x, this.player.y - zombie.y)
+      const distance = dir.length()
+
+      if (def.ranged && distance <= def.ranged.range) {
+        zombie.setVelocity(0, 0)
+        if (dir.lengthSq() > 0) zombie.setRotation(Math.atan2(dir.y, dir.x))
+
+        const lastFired = (zombie.getData('lastFiredAt') as number) ?? 0
+        if (now - lastFired >= def.ranged.fireIntervalMs) {
+          zombie.setData('lastFiredAt', now)
+          this.fireZombieProjectile(zombie, def.ranged, dir)
+        }
+        return
+      }
+
       if (dir.lengthSq() > 0) {
         dir.normalize()
         zombie.setRotation(Math.atan2(dir.y, dir.x))
       }
-      zombie.setVelocity(dir.x * ZOMBIE_SPEED, dir.y * ZOMBIE_SPEED)
+
+      const isElite = zombie.getData('isElite') as boolean
+      const speed = def.speed * (isElite ? ELITE_SPEED_MULTIPLIER : 1)
+      zombie.setVelocity(dir.x * speed, dir.y * speed)
     })
+  }
+
+  private fireZombieProjectile(zombie: Phaser.Physics.Arcade.Sprite, ranged: NonNullable<EnemyDef['ranged']>, dir: Phaser.Math.Vector2): void {
+    const normalized = dir.clone().normalize()
+    const proj = this.enemyProjectiles.create(zombie.x, zombie.y, 'enemy-bullet-tex') as Phaser.Physics.Arcade.Sprite
+    proj.setData('damage', ranged.projectileDamage)
+    proj.setVelocity(normalized.x * ranged.projectileSpeed, normalized.y * ranged.projectileSpeed)
+    this.time.delayedCall(PROJECTILE_LIFETIME_MS, () => proj.destroy())
   }
 
   private attractXpGems(): void {
@@ -316,7 +408,10 @@ export class GameScene extends Phaser.Scene {
     const damage = projectile.getData('damage') as number
     const hp = (zombie.getData('hp') as number) - damage
     if (hp <= 0) {
-      this.spawnXpGem(zombie.x, zombie.y)
+      const def = zombie.getData('def') as EnemyDef
+      const isElite = zombie.getData('isElite') as boolean
+      const xpValue = Math.round(def.xpValue * (isElite ? ELITE_XP_MULTIPLIER : 1))
+      this.spawnXpGem(zombie.x, zombie.y, xpValue)
       zombie.destroy()
       this.killCount += 1
     } else {
@@ -334,14 +429,27 @@ export class GameScene extends Phaser.Scene {
   private onPlayerHitZombie(zombie: Phaser.Physics.Arcade.Sprite): void {
     if (this.isGameOver) return
 
+    const def = zombie.getData('def') as EnemyDef
+    const isElite = zombie.getData('isElite') as boolean
+    const damage = Math.round(def.contactDamage * (isElite ? ELITE_CONTACT_MULTIPLIER : 1))
+
     zombie.destroy()
-    this.playerHp = Math.max(0, this.playerHp - ZOMBIE_CONTACT_DAMAGE)
+    this.playerHp = Math.max(0, this.playerHp - damage)
     if (this.playerHp <= 0) this.endGame()
   }
 
-  private spawnXpGem(x: number, y: number): void {
+  private onPlayerHitByProjectile(projectile: Phaser.Physics.Arcade.Sprite): void {
+    if (this.isGameOver) return
+
+    const damage = projectile.getData('damage') as number
+    projectile.destroy()
+    this.playerHp = Math.max(0, this.playerHp - damage)
+    if (this.playerHp <= 0) this.endGame()
+  }
+
+  private spawnXpGem(x: number, y: number, value: number): void {
     const gem = this.xpGems.create(x, y, 'gem-tex') as Phaser.Physics.Arcade.Sprite
-    gem.setData('value', XP_GEM_VALUE)
+    gem.setData('value', value)
   }
 
   private onPlayerCollectGem(gem: Phaser.Physics.Arcade.Sprite): void {
