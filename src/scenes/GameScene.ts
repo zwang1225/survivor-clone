@@ -7,6 +7,7 @@ import {
   weaponProjectileCountAtLevel,
 } from '../weapons'
 import { PASSIVE_DEFS, type PassiveDef } from '../passives'
+import { EVOLUTION_DEFS, type EvolvedWeaponDef } from '../evolutions'
 
 const WORLD_WIDTH = 800
 const WORLD_HEIGHT = 600
@@ -51,6 +52,7 @@ export class GameScene extends Phaser.Scene {
   private ownedWeapons = new Map<string, number>()
   private weaponCooldowns = new Map<string, number>()
   private ownedPassives = new Map<string, number>()
+  private ownedEvolvedWeapons = new Set<string>()
 
   // Aggregated from ownedPassives by recomputePassiveEffects(). Percentage
   // stats are multipliers (1 = no effect); magnetRadiusBonus is additive.
@@ -226,27 +228,63 @@ export class GameScene extends Phaser.Scene {
       this.weaponCooldowns.set(weaponId, now)
       this.fireWeapon(def, level, target)
     }
+
+    for (const evoId of this.ownedEvolvedWeapons) {
+      const def = EVOLUTION_DEFS.find((e) => e.id === evoId)
+      if (!def) continue
+
+      const lastFired = this.weaponCooldowns.get(evoId) ?? 0
+      const interval = def.fireIntervalMs * this.cooldownMultiplier
+      if (now - lastFired < interval) continue
+
+      const target = this.findNearestZombie()
+      if (!target) continue
+
+      this.weaponCooldowns.set(evoId, now)
+      this.fireEvolvedWeapon(def, target)
+    }
   }
 
   private fireWeapon(def: WeaponDef, level: number, target: Phaser.Physics.Arcade.Sprite): void {
+    const damage = Math.round(weaponDamageAtLevel(def, level) * this.damageMultiplier)
+    const projectileCount = weaponProjectileCountAtLevel(def, level)
+    this.fireSpread(target, def.color, damage, projectileCount, def.spreadDegrees, 1)
+  }
+
+  private fireEvolvedWeapon(def: EvolvedWeaponDef, target: Phaser.Physics.Arcade.Sprite): void {
+    const damage = Math.round(def.damage * this.damageMultiplier)
+    this.fireSpread(target, def.color, damage, def.projectileCount, def.spreadDegrees, def.pierce)
+  }
+
+  private fireSpread(
+    target: Phaser.Physics.Arcade.Sprite,
+    color: number,
+    damage: number,
+    projectileCount: number,
+    spreadDegrees: number,
+    pierce: number
+  ): void {
     const baseDir = new Phaser.Math.Vector2(target.x - this.player.x, target.y - this.player.y)
     if (baseDir.lengthSq() === 0) return
     baseDir.normalize()
 
-    const damage = Math.round(weaponDamageAtLevel(def, level) * this.damageMultiplier)
-    const projectileCount = weaponProjectileCountAtLevel(def, level)
-    const spreadRad = Phaser.Math.DegToRad(def.spreadDegrees)
+    const spreadRad = Phaser.Math.DegToRad(spreadDegrees)
 
     for (let i = 0; i < projectileCount; i++) {
       const t = projectileCount === 1 ? 0 : i / (projectileCount - 1) - 0.5
       const dir = baseDir.clone().rotate(spreadRad * t)
-
-      const bullet = this.projectiles.create(this.player.x, this.player.y, 'bullet-tex') as Phaser.Physics.Arcade.Sprite
-      bullet.setTint(def.color)
-      bullet.setData('damage', damage)
-      bullet.setVelocity(dir.x * PROJECTILE_SPEED, dir.y * PROJECTILE_SPEED)
-      this.time.delayedCall(PROJECTILE_LIFETIME_MS, () => bullet.destroy())
+      this.spawnProjectile(dir, color, damage, pierce)
     }
+  }
+
+  private spawnProjectile(dir: Phaser.Math.Vector2, color: number, damage: number, pierce: number): void {
+    const bullet = this.projectiles.create(this.player.x, this.player.y, 'bullet-tex') as Phaser.Physics.Arcade.Sprite
+    bullet.setTint(color)
+    bullet.setData('damage', damage)
+    bullet.setData('pierce', pierce)
+    bullet.setData('hitZombies', new Set<Phaser.Physics.Arcade.Sprite>())
+    bullet.setVelocity(dir.x * PROJECTILE_SPEED, dir.y * PROJECTILE_SPEED)
+    this.time.delayedCall(PROJECTILE_LIFETIME_MS, () => bullet.destroy())
   }
 
   private findNearestZombie(): Phaser.Physics.Arcade.Sprite | null {
@@ -266,9 +304,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private onProjectileHitZombie(projectile: Phaser.Physics.Arcade.Sprite, zombie: Phaser.Physics.Arcade.Sprite): void {
-    const damage = projectile.getData('damage') as number
-    projectile.destroy()
+    // Arcade overlap fires every frame two bodies overlap, not once --
+    // without this, a piercing projectile would hit the same zombie
+    // repeatedly for as long as they're touching instead of passing
+    // through it once.
+    const hitZombies = projectile.getData('hitZombies') as Set<Phaser.Physics.Arcade.Sprite>
+    if (hitZombies.has(zombie)) return
+    hitZombies.add(zombie)
 
+    const damage = projectile.getData('damage') as number
     const hp = (zombie.getData('hp') as number) - damage
     if (hp <= 0) {
       this.spawnXpGem(zombie.x, zombie.y)
@@ -276,6 +320,13 @@ export class GameScene extends Phaser.Scene {
       this.killCount += 1
     } else {
       zombie.setData('hp', hp)
+    }
+
+    const pierceRemaining = (projectile.getData('pierce') as number) - 1
+    if (pierceRemaining <= 0) {
+      projectile.destroy()
+    } else {
+      projectile.setData('pierce', pierceRemaining)
     }
   }
 
@@ -317,6 +368,12 @@ export class GameScene extends Phaser.Scene {
     const pool: LevelUpChoice[] = []
 
     for (const def of WEAPON_DEFS) {
+      // A weapon that's already evolved shouldn't be re-offerable as a
+      // fresh unlock -- it's gone from ownedWeapons (see applyEvolution),
+      // which would otherwise make currentLevel read back as 0.
+      const hasEvolved = EVOLUTION_DEFS.some((e) => e.baseWeaponId === def.id && this.ownedEvolvedWeapons.has(e.id))
+      if (hasEvolved) continue
+
       const currentLevel = this.ownedWeapons.get(def.id) ?? 0
       if (currentLevel >= def.maxLevel) continue
       pool.push({ kind: 'weapon', def, nextLevel: currentLevel + 1, isNew: currentLevel === 0 })
@@ -363,12 +420,56 @@ export class GameScene extends Phaser.Scene {
       this.ownedPassives.set(choice.def.id, choice.nextLevel)
       this.recomputePassiveEffects()
     }
+    this.checkForEvolutions()
 
     document.getElementById('level-up-overlay')!.classList.add('hidden')
     this.isPausedForLevelUp = false
     this.physics.resume()
     this.time.paused = false
     this.updateHud()
+  }
+
+  // Evolutions apply automatically the moment their conditions are met
+  // (base weapon maxed + required passive maxed), not offered as a random
+  // choice -- matches the genre convention this is modeled on.
+  private checkForEvolutions(): void {
+    for (const evo of EVOLUTION_DEFS) {
+      if (this.ownedEvolvedWeapons.has(evo.id)) continue
+
+      const weaponDef = WEAPON_DEFS.find((w) => w.id === evo.baseWeaponId)
+      const passiveDef = PASSIVE_DEFS.find((p) => p.id === evo.requiredPassiveId)
+      if (!weaponDef || !passiveDef) continue
+
+      const weaponLevel = this.ownedWeapons.get(evo.baseWeaponId) ?? 0
+      const passiveLevel = this.ownedPassives.get(evo.requiredPassiveId) ?? 0
+      if (weaponLevel >= weaponDef.maxLevel && passiveLevel >= passiveDef.maxLevel) {
+        this.applyEvolution(evo)
+      }
+    }
+  }
+
+  private applyEvolution(evo: EvolvedWeaponDef): void {
+    this.ownedWeapons.delete(evo.baseWeaponId)
+    this.ownedEvolvedWeapons.add(evo.id)
+    this.showEvolutionNotice(evo)
+  }
+
+  private showEvolutionNotice(evo: EvolvedWeaponDef): void {
+    const text = this.add
+      .text(WORLD_WIDTH / 2, 120, `${evo.name} unlocked!`, {
+        fontFamily: 'monospace',
+        fontSize: '24px',
+        color: '#ffd54f',
+      })
+      .setOrigin(0.5)
+
+    this.tweens.add({
+      targets: text,
+      y: text.y - 40,
+      alpha: 0,
+      duration: 2000,
+      onComplete: () => text.destroy(),
+    })
   }
 
   private recomputePassiveEffects(): void {
